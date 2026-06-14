@@ -1,0 +1,22 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.azukaar.betterlucklootr.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "better_luck_lootr.refmap.json",
+  "plugin": "com.azukaar.betterlucklootr.mixin.BLLMixinPlugin",
+  "mixins": [
+    "LootPoolMixin",
+    "LootPoolAccessor",
+    "LootPoolEntryContainerAccessor",
+    "LootPoolSingletonContainerAccessor",
+    "LootItemAccessor",
+    "TagEntryAccessor",
+    "LootTableAccessor",
+    "LootTableReferenceAccessor",
+    "LootCategoryMixin",
+    "LootContextMixin",
+  ],
+  "client": [],
+  "server": []
+}
