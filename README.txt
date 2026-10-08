@@ -1,46 +1,183 @@
+Better Luck Lootr
+=================
 
-Source installation information for modders
--------------------------------------------
-This code follows the Minecraft Forge installation methodology. It will apply
-some small patches to the vanilla MCP source code, giving you and it access 
-to some of the data and functions you need to build a successful mod.
+Minecraft 1.20.1 / Forge 47.4.0 / Java 17
 
-Note also that the patches are built against "un-renamed" MCP source code (aka
-SRG Names) - this means that you will not be able to read them directly against
-normal code.
+功能
+----
 
-Setup Process:
-==============================
+- 根据玩家幸运值为宝箱战利品增加完整 Roll 和低成本数量增量。
+- 完整 Roll 用于提高实际战利品种类，增量阶段只处理已经生成的完整 ItemStack。
+- 支持物品、前缀、标签和模组范围的黑名单与去重规则。
+- 支持简单 NBT 字段、字段路径与附魔 ID 过滤、权重/均匀增量、碳模式和通用容器槽位限制。
+- 对安全的简单战利品池使用作用域受限的缓存快速路径，复杂池自动回退原版。
+- Apotheosis 与动态条目回退原版路径，并通过槽位预算和池级停止限制过量生成。
+- 即使关闭容器兼容模式，本模组的累积生成仍保留 4096 个物理栈的硬安全上限。原始合法结果已经超过该上限时，原样保留并跳过额外生成。
+- 普通 NBT 和 Forge 能力数据参与物品身份比较，数量增量遵守额外黑名单和 NBT 过滤。
 
-Step 1: Open your command-line and browse to the folder where you extracted the zip file.
+Roll 语义
+---------
 
-Step 2: You're left with a choice.
-If you prefer to use Eclipse:
-1. Run the following command: `./gradlew genEclipseRuns`
-2. Open Eclipse, Import > Existing Gradle Project > Select Folder 
-   or run `gradlew eclipse` to generate the project.
+`full_rolls` 包含 Minecraft 已经完成的首次原版 Roll。默认值 10 表示模组最多额外执行 9 次完整 Roll。达到完整 Roll 上限、幸运预算或容器槽位上限后立即停止，剩余预算进入增量阶段。
 
-If you prefer to use IntelliJ:
-1. Open IDEA, and import project.
-2. Select your build.gradle file and have it import.
-3. Run the following command: `./gradlew genIntellijRuns`
-4. Refresh the Gradle Project in IDEA if required.
+去重补偿模式 1 只在可证明安全的简单池中进行有界候选重选，不会增加完整 Roll 总次数；复杂池继续走原版路径。
 
-If at any point you are missing libraries in your IDE, or you've run into problems you can 
-run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset everything 
-(this does not affect your code) and then start the process again.
+`loot_richness` 独立增加数量增量预算，幸运为零时仍有效。额外完整 Roll 使用零幸运，但保留原始参数、动态掉落回调和查询表 ID。
 
-Mapping Names:
-=============================
-By default, the MDK is configured to use the official mapping names from Mojang for methods and fields 
-in the Minecraft codebase. These names are covered by a specific license. All modders should be aware of this
-license, if you do not agree with it you can change your mapping names to other crowdsourced names in your 
-build.gradle. For the latest license text, refer to the mapping file itself, or the reference copy here:
-https://github.com/MinecraftForge/MCPConfig/blob/master/Mojang.md
+额外完整 Roll 执行原版战利品表条件、子表和函数；不会逐轮再次运行其他模组的全局战利品修饰器。已启用的本模组修饰器会稳定前置到 Forge 全局修饰器链开头，其他修饰器保持彼此原有顺序，对合并后的原始与额外物品各检查一次。玩家、原始幸运和查询表 ID 保留，首次领取和佩戴资格交由原模组判定，不硬编码特定模组。数据包禁用本模组修饰器后不会被重新插回；不可变链缓存随来源集合更换而失效。
 
-Additional Resources: 
-=========================
-Community Documentation: https://docs.minecraftforge.net/en/1.20.1/gettingstarted/
-LexManos' Install Video: https://youtu.be/8VEdtQLuLO0
-Forge Forums: https://forums.minecraftforge.net/
-Forge Discord: https://discord.minecraftforge.net/
+该处理避免额外掉落在第三方资格检查结束后重新加入，也避免后置追加的首次奖励被本模组数量增量放大。原模组若只限制后续宝箱领取、没有限制首次结果中的物品数量，本模组不会擅自把首次结果改为一件。战利品表函数和动态掉落回调仍可能随完整 Roll 执行多次，其任意玩家状态副作用不在这项全局修饰器修复的保证范围内。
+
+容量与过滤
+----------
+
+通过 `LootTable.fill` 填充时，额外生成使用真实目标容器的空槽预算；不依据坐标猜测容器，也不对无法识别目标的生成固定套用 27 格上限。原始合法结果先保留，再限制额外生成。全局修饰器链完成后重新检查空槽，按完整 NBT/ForgeCaps 指纹核算来源份额：原始份额和第三方净追加数量优先，BLL 的完整重 Roll 额外物品和数量增量只占剩余容量。多个 BLL 实例继承先前的额外份额，不将其误当成原始物品。
+
+正常装得下时直接使用最终结果，不为容量优先级额外序列化整份 NBT。装不下时才按完整指纹聚合，并依据容器和物品的堆叠上限重新分栈；先预留受保护份额，余量再放额外奖励。只削减最终仍存在的额外数量，不复活被第三方删除的物品，不重放特殊规则，不回滚玩家状态。
+
+装不下的 BLL 额外份额直接舍弃，不自动塞背包、不落地、不创建隐藏暂存或后续补发。无玩家和 Forge FakePlayer 也可在容量允许时获得增强。旧测试版本已经写入的待领取数据保持原样，本版不再读取、删除或自动发放。
+
+保护份额自身就超出容器时，先移除全部已知 BLL 额外份额，其余仍由原版处理，因此不保证原本就溢出的箱子可以装下所有物品。第三方将同一完整指纹先删再加、且净数量没有增加时，通用最终结果无法辨别新旧来源；第三方重写 NBT/能力数据后产生的未知指纹则全部优先保留。自行填充而不调用 `LootTable.fill` 的自定义私人库存，由其自身管理最终容量，本模组生成仍受 4096 栈硬上限约束。
+
+默认全局黑名单包含 `minecraft:filled_map`，不可堆叠物品默认按物品 ID 保留一份；这些过滤在零幸运时也生效。`max_effective_luck` 是所有 LootContext 的幸运封顶，可能影响钓鱼等非宝箱场景。
+
+过滤与数量限制覆盖进入本模组的原始结果及本模组奖励。其他全局修饰器在之后追加或重写的物品不会再次经过本模组过滤和增量；这样不会在第三方提交首次领取状态后再将其奖励删掉。`global` 不表示最后强制清洗所有第三方修饰器输出。
+
+去重规则优先级为精确 ID、最长前缀、模组、标签；多个标签匹配时使用最小限制。显式数量 0 表示不保留。配置加载、重载和卸载时使解析快照失效。
+
+NBT 简单过滤
+------------
+
+`nbt.segments` 现在填写明确的字段或附魔 ID，匹配任一规则即排除整个物品，不会只剥离其附魔。默认空列表不拦截。
+
+- `Enchantments`：普通附魔列表非空的物品。
+- `StoredEnchantments`：存储附魔列表非空的物品，如附魔书。
+- `minecraft:protection`：仅匹配上述两处列表内 ID 完全相同的保护附魔；不会因名称、Lore 中出现该文字而误判。
+- `display.Name`、`display.Lore`、`AttributeModifiers`：按需检查名称、说明或属性字段；空列表不命中。
+- 其他不含冒号或点号的根字段也可配置；点号表示 Compound 路径，不支持列表索引。字段名区分大小写，普通字段按存在性判断，包括值为 false 或 0 的字段。
+
+仅过滤指定附魔的示例：
+
+    [nbt]
+    scope = "bonus_only"
+    segments = ["minecraft:protection"]
+
+若要排除所有带附魔的物品，使用 `segments = ["Enchantments", "StoredEnchantments"]`。`global` 同时过滤原始及额外掉落，`bonus_only` 保留原始掉落，仅过滤额外生成与数量增量。
+
+过滤只读取指定字段，不再把整份 NBT 转成字符串。旧 `limit_bytes` 大小限制已移除；旧任意文本片段规则应改为字段路径或附魔 ID。
+
+NBT 精确条件
+------------
+
+需要区分同一物品的不同宝石或品质时，在 segments 中填写 JSON 对象字符串。以下 TOML 使用单引号包住 JSON，无需转义 JSON 双引号。示例中的 example:ruby、example:rare 是占位数据，需替换成物品实际保存的字段值：
+
+    [nbt]
+    scope = "bonus_only"
+    segments = [
+      '{"item":"apotheosis:gem","all":[{"path":"gem","op":"eq","value":"example:ruby"},{"path":"affix_data.rarity","op":"eq","value":"example:rare"}]}'
+    ]
+
+item 为可选的精确物品 ID；指定后其他物品跳过该规则。all 内全部条件成立才排除物品，segments 中不同规则则任意一条命中即可。神化 1.20 分支的宝石种类保存在 gem，品质保存在 affix_data.rarity；实际 ID 与旧版品质值以安装版本和物品 NBT 为准。
+
+条件支持：
+- path：点分隔的 Compound 字段路径，也可写键数组，如 ["mod:key", "name.with.dot"]，直接访问含冒号、点号的字面字段。
+- op：exists（默认）、eq（等于）、gt（大于）、gte（大于等于）、lt（小于）、lte（小于等于）。exists 不填写 value，空列表不命中。
+- value：字符串区分大小写精确匹配；数字可跨 NBT 数字类型比较，不将大整数转为 double；浮点按实际存储值比较，NaN/无穷不命中。布尔值只匹配 NBT byte 的 0/1。缺失字段、错误类型不匹配，不把数字字符串自动转换为数字。
+- any：替代 op/value，用条件数组检查 Compound 列表；同一个列表元素必须满足数组中的全部条件，支持嵌套列表。
+
+例如，仅过滤保护等级至少 III 的普通附魔物品：
+
+    segments = [
+      '{"all":[{"path":"Enchantments","any":[{"path":"id","op":"eq","value":"minecraft:protection"},{"path":"lvl","op":"gte","value":3}]}]}'
+    ]
+
+附魔书把路径改为 StoredEnchantments；要覆盖两类，在 segments 中填写两条规则。保护 I 与耐久 V 不会合并成一次高等级保护命中。旧附魔 ID 简写仍同时检查两类附魔列表。
+
+规则在配置加载后预解析，同一 all 内相同路径只读取一次，不为过滤复制或序列化整份 NBT，不缓存可变 ItemStack 的过滤结果。相关列表完整检查到命中或结束，不截断列表；极大相关列表仍需相应遍历成本。无关的大数组不访问。无效 JSON、未知条件或空条件数组使整条新规则停用并告警，其他有效规则继续执行；嵌套条件最多 32 层。仅检查物品 tag 内的数据，不主动序列化 Forge 能力数据。后续其他模组追加/修改的掉落仍受前述调用顺序边界约束。
+
+范围
+----
+
+当前只作用于 `*:chests/*` 战利品表，并排除 `mvs:*` 与 `structory*`。本版本不包含 Lootr Big Chest 专用兼容逻辑，普通容器仍通过 Minecraft `Container` 接口处理。
+
+构建
+----
+
+Windows:
+
+    gradlew.bat clean build
+
+生成的 JAR 位于 `build/libs`。不要在构建流程中直接部署到 `mods`。
+
+验证
+----
+
+测试源码和结构按既有仓库范围保留本地；以下验证命令适用于包含本地测试文件的工作副本。
+
+    gradlew.bat test build runGameTestServer
+
+单元测试覆盖过滤、预算回流、容量、配置优先级、能力数据快照与快速池回退；GameTest 在 Forge 服务端验证实际 Mixin、容器填充上下文、幸运隔离和动态掉落。测试结构由启动任务自动准备，测试代码及结构不进入生产 JAR。
+
+已在 Minecraft 1.20.1 / Forge 47.4.0 / Java 17 下开启基准，通过 109 项单元测试和 35 项 GameTest。普通环境未加载 Lootr 时，其可选库存测试直接返回；共载环境才执行真实 Lootr 断言。单元测试零失败、零跳过，普通与共载 GameTest 全部通过。生产 JAR 的 Mixin/refmap 已核对，未包含测试代码和结构。未对完整第三方整合包进行联机压力测试；自定义库存与其他全局战利品修饰器的行为仍受前述边界约束。
+
+特殊规则修复先在旧实现复现三项失败：额外掉落绕过已领取/佩戴资格、首次追加物品被数量增量放大、修饰器顺序不稳定。修复后验证真实 ForgeHooks 链的调用顺序、原始玩家上下文、各修饰器只执行一次、数据包禁用、不可变重载与可变集合原地修改。容量改为来源优先级前，旧补发实现另复现五项回归失败；现已移除补发。优先级测试覆盖两槽箱子保留原始和特殊物品、舍弃额外物品，第三方复制整份列表、同指纹净追加、不同NBT、8 KiB特殊物品数据、混合增量与容器堆叠上限、最终空槽变化、删除结果不复活、无玩家和FakePlayer增强、背包不被补发、旧暂存不被修改。还覆盖两个BLL实例贡献继承、嵌套fill以及部分生成异常后仍正确舍弃额外份额。共载环境使用真实Lootr两槽私人库存执行原始/特殊优先级断言。资格规则采用可控第三方修饰器复现；未运行神秘遗物完整模组或用户整合包，不能视为任意模组的全部规则实测。
+
+后续权重复用与诊断优化：幸运权重分布保留基础分布和最近一个其他幸运值的分布，连续同值抽样复用数组；quality 全零且幸运值有限时直接复用基础分布。浮点权重计算、超出 int 总权重时回退原版、单候选随机数消耗均保留；基础分布与旧公开数组隔离。
+
+加权增量使用战利品表实例持有的缓存，复用前核对池顺序、条目身份、权重、物品/标签以及完整标签成员，变化即重建；不依赖第三方发布重载事件。仍需遍历相关元数据，但减少权重表创建、注册 ID 查询和重复汇总。缓存随表实例释放，代价是每张使用过该功能的表保留一份来源信息与权重结果；无增量候选时不创建缓存。该缓存只服务于数量增量，不缓存 NBT 过滤结果。
+
+快速池现在也在复用前检查条目、物品、权重、quality、函数/条件和完整标签成员；改变后重建并重新判断快速路径资格。缺失标签加载、空标签恢复和复杂条目变回简单条目均可恢复快速路径。旧公开数组与内部抽样数据隔离。校验仍需遍历条目与标签成员，不以遗漏变化换取恒定时间查询。
+
+增量权重表延后到候选过滤结束后获取；无候选、全部过滤、无增量或均匀模式均不扫描权重来源。累计计数、最大堆叠和隔离引用统一保存，输出及诊断使用固定计数快照；复制回调后重新核对容量，保留公共副本接口。
+
+第三方能力复制回调重入同一掉落 consumer 时，按每次实际接受数量记账，复制完成后重查同物品的共享数量上限；覆盖相同指纹重复记账和不同 NBT 指纹合计越限。新回归已先确认旧实现失败，修复后通过。
+
+诊断机会在准备好实际奖励生成后才领取，原始结果过大或初始化失败不会提前耗尽机会；原始过滤统计继续保留。正常额外生成上下文的幸运仍归零，避免幸运重复加成；非零幸运分布缓存并非通常开箱的主要加速来源。
+
+连续重复的大 NBT 物品现在复用当前累计器最近一次成功接受的冻结指纹。每次仍调用完整 ItemStack.save 并比较全部数据，只有物品身份和完整保存内容相等才复用；新类型继续完整复制，不凭哈希相等合并，不缓存可变 ItemStack 的过滤结果。只额外保留一个冻结指纹引用，累计器结束后释放。公开 StackFingerprint.of 仍每次创建隔离快照。此优化主要减少连续重复数据的复制与哈希；交错变体命中率低，大数组仅尾部不同仍有完整比较成本。
+
+单槽复用基准（同一份1 MiB数据连续累计32次、12次采样）：普通NBT分配从67633.5降至35866.2 KiB，均值从37.6149到12.5328 ms；能力数据分配从32840.0降至1053.9 KiB，均值从32.5870到3.1008 ms。前后独立JVM运行，耗时受负载和JIT影响。额外同轮对照中，8个仅大数组尾字节不同的变体，不复用14.1377 ms、复用14.4276 ms，两者分配均32787.6 KiB；说明该优化有针对性，不能视为所有NBT负载或整合包TPS的提升。回归覆盖每次重新序列化、可变能力数据、真实哈希碰撞、拒绝接受后保留最近指纹。
+
+大型数据回归覆盖 1 MiB NBT、能力数据指纹及拆栈副本隔离，不截断数组或列表。8 栈各含 1 MiB NBT 的累计/输出组件基准（最终普通环境、12 次采样）平均 20.8105 ms、P95 27.1269 ms、分配约 48 MiB；包含数据创建及复制，不能解释为过滤函数耗时。完整指纹和副本隔离仍有随数据量增长的成本。
+
+可选第三方共载测试通过测试运行依赖加载，不复制 JAR 到 mods，也不增加生产专用兼容分支。例如已有本地 Maven 坐标式文件 lootr-forge-1.20-0.7.35.94.jar 时：
+
+    gradlew.bat -PcompatRepository=C:/path/to/libs -PcompatMods=local:lootr-forge:1.20-0.7.35.94 -PcompatExpectedMods=lootr runGameTestServer
+
+compatMods 支持逗号分隔的依赖坐标，compatExpectedMods 检查对应模组确实被 Forge 加载。兼容测试使用项目 run-compat，普通测试使用 run，避免两种环境交叉修改同一测试世界。已用本机 Lootr 0.7.35.94 验证共载和真实 SpecialChestInventory 填充、容量及上下文清理；这不替代完整整合包的联机压力测试或 Lootr 全部玩家开箱、持久化流程测试。
+
+进一步通过 Lootr ChestData.createInventory 为两位 FakePlayer 创建真实库存，验证UUID隔离、查询复用、1 MiB NBT压缩序列化往返、恢复后的物品隔离、取走物品后二次保存数量及修改后的NBT尾值。测试使用内存字节流，不修改玩家存档；覆盖保存数据的序列化和恢复，不等于操作系统落盘、断电恢复、完整服务端重启或客户端网络同步验证。生产仍通过通用Container接口和完整NBT处理，无Lootr专用分支。
+
+关闭 DEBUG 时跳过常规计时；开启诊断时直接读取累计结果统计，不复制 ItemStack 或序列化能力数据。公共 reference 接口、最终掉落的副本隔离与 NBT/ForgeCaps 指纹保持原行为。
+
+本轮验证覆盖同幸运值复用与切换、负权重和浮点边界、真实抽样的随机数消耗、旧公开数组修改隔离、池增删、同一条目数组替换、原条目权重修改、缺失标签出现及同大小成员替换。诊断回归确认能力序列化次数从 1 降至 0，公共副本仍执行复制。Forge 内 1024 个条目、2000 次稳定表查询的同轮基准：原算法重建总计 137.7047 ms / 96334.0 KiB 分配，缓存查询总计 4.8488 ms / 265.6 KiB 分配。数据含测试反射调用开销，只代表稳定表重复查询场景，不代表完整开箱或整合包 TPS 提升；频繁变更数据会增加缓存重建成本。
+
+上一轮三项优化：NBT 组合规则在解析时按物品 ID 建立索引，仅检查通用规则和当前物品规则，保持原配置相对顺序及完整字段、列表匹配；加权增量在候选至少 128 种时使用 long 权重树，保持每轮无放回抽样、轮末恢复和原随机调用边界，小集合仍使用线性抽样；生产输出直接构造 ObjectArrayList，均匀模式省去权重表和数组，交换记录按每轮最大抽取数分配。公开 List 返回接口、输出物品复制隔离及通用 NBT 兼容语义保留。
+
+本次前后组件基准：2049 条规则中仅 1 条关联当前物品，20000 次匹配总耗时从 313.3103 ms 降至 9.3312 ms；4096 种候选、500 轮增量、各 12 次采样，加权均值从 10.7083 ms 降至 7.7202 ms，P95 从 13.7562 ms 降至 10.6871 ms。权重树使该场景每次分配从 16944.9 KiB 小幅增至 16984.5 KiB；均匀模式分配从 16945.3 KiB 降至 16871.4 KiB，均值从 6.0026 ms 到 5.9596 ms。上述为合成压测，不能解释为整合包 TPS 提升比例。新增测试验证全部权重区间、长整数权重和、逐轮恢复、127/128/129 候选分支、NBT 混合规则顺序及拆栈数据隔离；独立代码复核未发现需要修复的问题。
+
+三项热点优化已完成：增量阶段每个候选只获取一次隔离副本；已注册物品 ID 直接匹配，去重限制单次查询，同时保留显式 0、精确/前缀/模组/标签优先级和标签实时变化；原始掉落使用一次遍历整理，保留顺序、裁剪副本以及异常发生时的未处理尾部。公共副本接口和完整 NBT/ForgeCaps 指纹未移除。
+
+三项优化后的组件基准（4096 种物品、500 轮增量、各 12 次采样）：加权均值 9.7195 ms / P95 12.0686 ms，前次同场景为 12.4924 ms / P95 14.0669 ms；分配从 25387.7 KiB 降到 17424.8 KiB。均匀模式本轮 6.0876 ms、17419.4 KiB。两项性能回归先确认旧实现失败，再验证单候选一次副本获取和过滤搬移次数线性有界；另验证了过滤中途异常、显式数量 0、规则优先级及标签重绑定。实际耗时仍受 JVM 和机器负载影响。
+
+NBT 精确条件扩展已覆盖：同物品不同 gem/rarity、同附魔元素的 ID/等级组合、列表尾部命中、字段类型及大小写、NBT 修改后重新判断、大整数与浮点边界、重复 JSON 键、非法/过深 JSON、64 KiB 长规则字符串及 1 MiB 无关负载。Forge 集成通过测试物品模拟宝石字段，验证战利品函数写入最终 NBT 后的组合匹配和 global/bonus_only 作用域，尚未加载神化本体进行整合包实测。
+
+扩展后的同轮 Forge 合成生成基准（64 KiB NBT、各 60 次）：空规则平均 2.9269 ms / P95 4.6468 ms，简单字段规则 2.6043 ms / P95 3.5786 ms，组合规则 2.6571 ms / P95 3.4226 ms。组合规则与字段规则每次分配均约 6135 KiB；命中组合规则拒绝时平均 0.2469 ms。这里测量完整生成流程，包含 NBT 创建和物品累积，不能单独解释为过滤函数耗时，也不代表完整整合包性能。
+
+前一轮性能与异常专项自检（2026-09-11）
+--------------------------------
+
+PowerShell 下设置 `$env:BLL_AUDIT='1'` 后运行 `gradlew.bat test runGameTestServer`，可启用组件与真实 Forge 生成基准；关闭该环境变量时跳过耗时基准。基准数据由 `[BLL-AUDIT-*]` 输出，JUnit 数据保存在测试 XML 的 system-out 中。运行只使用项目 run 测试世界。
+
+本轮已修复复制异常和复杂池空转，并按用户需求简化 NBT 过滤。复制事务、奖励保留、复杂池早停及 NBT 新语义均先复现失败，再完成修复验证；最终 `test build runGameTestServer` 全部成功。
+
+修复结果：
+- 新物品引用成功复制后才提交计数，避免能力序列化在 ItemStack.copy 阶段抛错留下不完整状态；此前成功生成的奖励、原始物品和下一次正常生成均通过故障注入验证。满槽新类型在复制前拒绝，已有类型仍能补满现有堆叠。
+- NBT 改为预解析的字段、路径和附魔 ID 规则，不创建完整 SNBT 或 UTF-8 数组。27 个各带 64 KiB 字节数组的组件基准，空规则平均 4.0865 ms，附魔字段规则 4.2900 ms；后者每轮分配约 10.26 MiB。命中附魔直接拒绝平均 0.0251 ms。修复前旧大小/文本过滤为 40.20 ms、101.45 MiB；两者过滤目的已改变，不能解释为同一大小检查的等价加速。
+- 复杂池填满后立即退出原版外层 rolls 循环。500 万 rolls 测试仍产 1 件，容量检查由 5000001 次降至 4 次，平均从约 102.66 ms 降至 0.0045 ms。原版条件、池函数、普通上下文及其他绑定上下文已验证保持正确。第三方若改写掉该循环调用，早停注入允许缺失以避免启动失败，此时可能无法获得该优化。
+
+本轮真实 Forge 合成生成基准：普通表幸运 50 平均 0.2071 ms / P95 0.3407 ms；16 层子表平均 0.2791 ms / P95 0.5641 ms；普通表幸运 2500 平均 0.7177 ms / P95 1.1821 ms。附加 64 KiB 字节数组 NBT 时，空规则平均 2.8013 ms，附魔字段规则 2.6000 ms，生成附魔后被规则拒绝平均 0.2662 ms。数据包含本模组生成处理，受 JVM 和机器负载波动影响，不能直接解释为完整整合包开箱耗时或 TPS 保证。
+
+5 批各 1000 次的 4 KiB NBT 组件循环，GC 后堆占用 90.784–90.787 MiB，未见持续增长；1255 个注册物品缓存预热后反复访问 100 轮，缓存条目仍为 1255。该结果不替代长时间联机测试。
+
+首次奖励函数异常、部分奖励后函数异常、原始能力序列化异常、空标签及循环子表的恢复测试通过。原始表在全局修饰器调用之前抛错，以及 JVM 内存耗尽或栈溢出，不在本轮安全恢复保证范围内。

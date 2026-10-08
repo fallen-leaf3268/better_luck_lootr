@@ -1,25 +1,20 @@
 package com.azukaar.betterlucklootr;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 
 
 import org.apache.commons.lang3.tuple.Pair;
 
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.common.ForgeConfigSpec;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.config.ModConfigEvent;
 
+@Mod.EventBusSubscriber(modid = BetterLuckLootr.MODID, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class BLModConfig {
     public static class Server
     {
@@ -41,35 +36,9 @@ public class BLModConfig {
         public static ForgeConfigSpec.IntValue max_effective_luck;
         public static ForgeConfigSpec.ConfigValue<String> nbt_scope;
         public static ForgeConfigSpec.ConfigValue<List<? extends String>> nbt_segments;
-        public static ForgeConfigSpec.IntValue nbt_limit_bytes;
         public static ForgeConfigSpec.IntValue dedup_compensation_mode;
         public static ForgeConfigSpec.IntValue dedup_reroll_max;
         public static ForgeConfigSpec.BooleanValue compatibility_mode;
-        private volatile List<? extends String> cachedRawBonusBlacklist;
-        private volatile Set<String> cachedBonusBlacklistIds = Set.of();
-        private volatile Set<String> cachedBonusBlacklistPrefixes = Set.of();
-        private volatile Set<TagKey<Item>> cachedBonusBlacklistTags = Set.of();
-        private volatile Set<String> cachedBonusBlacklistMods = Set.of();
-
-        private volatile List<? extends String> cachedRawGlobalBlacklist;
-        private volatile Set<String> cachedGlobalBlacklistIds = Set.of();
-        private volatile Set<String> cachedGlobalBlacklistPrefixes = Set.of();
-        private volatile Set<TagKey<Item>> cachedGlobalBlacklistTags = Set.of();
-        private volatile Set<String> cachedGlobalBlacklistMods = Set.of();
-
-        private volatile List<? extends String> cachedRawCurve;
-        private volatile List<CurveSegment> cachedCurve = List.of();
-
-        private volatile List<? extends String> cachedRawNoStack;
-        private volatile Map<String, Integer> cachedNoStackIds = Map.of();
-        private volatile Map<String, Integer> cachedNoStackPrefixes = Map.of();
-        private volatile Map<TagKey<Item>, Integer> cachedNoStackTags = Map.of();
-        private volatile Map<String, Integer> cachedNoStackMods = Map.of();
-
-        private volatile String cachedNbtScope = "global";
-        private volatile List<? extends String> cachedRawNbtSegments;
-        private volatile Set<String> cachedNbtSegments = Set.of();
-
         Server(ForgeConfigSpec.Builder builder) {
             builder.push("curve");
             curve = builder
@@ -113,14 +82,14 @@ public class BLModConfig {
                          "不指定数量则使用全局 no_stack_count")
                 .defineList("items", List.of(), entry -> {
                     String s = entry.toString();
-                    return parseDedupEntry(s) != null;
+                    return LootConfigSnapshot.DedupRuleSet.isValidEntry(s);
                 });
             no_stack_count = builder
                 .comment("全局去重保留份数 (默认1 = 仅保留1份)")
                 .defineInRange("no_stack_count", 1, 0, 64);
             dedup_compensation_mode = builder
                 .comment("去重补偿模式 - 当物品达到去重上限时的处理方式",
-                         "1 = 返回重roll (重新抽取以发现更多物品种类)",
+                         "1 = 安全简单池内有界重选 (不增加完整 Roll 总次数)",
                          "2 = Step3阶段补偿 (将丢弃次数加成到poolPicks数量上)")
                 .defineInRange("dedup_compensation_mode", 1, 1, 2);
             dedup_reroll_max = builder
@@ -211,9 +180,9 @@ public class BLModConfig {
 
             builder.push("luck");
             max_effective_luck = builder
-                .comment("原版幸运上限 - 限制幸运对原版战利品的影响（quality加成等）",
-                         "仅限制原版战利品表使用的幸运值，不影响本模组的额外roll次数",
-                         "本模组额外战利品仍使用玩家完整幸运值计算roll次数",
+                .comment("幸运上限 - 限制所有 LootContext 返回的幸运值（quality加成等）",
+                         "可能影响第三方模组及钓鱼等非宝箱场景的幸运计算",
+                         "本模组额外预算仍使用玩家完整幸运值计算，不受此上限影响",
                          "0 = 不限制")
                 .defineInRange("max_effective_luck", 0, 0, 100000);
             builder.pop();
@@ -223,19 +192,19 @@ public class BLModConfig {
                 .comment("NBT过滤作用域",
                          "\"global\" = 过滤所有战利品（原版+BLL额外）",
                          "\"bonus_only\" = 仅过滤BLL额外战利品")
-                .define("scope", "global");
+                .define("scope", "global", value -> value instanceof String scope
+                    && ("global".equalsIgnoreCase(scope.trim()) || "bonus_only".equalsIgnoreCase(scope.trim())));
             nbt_segments = builder
-                .comment("NBT段落匹配规则 - 物品NBT字符串包含列表中任一段落即过滤",
+                .comment("NBT过滤规则，默认留空不过滤；任一规则命中即过滤",
+                         "字段示例: Enchantments、StoredEnchantments、AttributeModifiers；空列表不命中",
+                         "路径示例: display.Name、display.Lore；仅检查对应字段，不搜索字符串内容",
                          "例: \"minecraft:protection\" = 有保护附魔的物品/书都过滤",
-                         "匹配对象为物品完整NBT字符串，跨所有物品生效")
-                .defineList("segments", List.of(), entry -> {
-                    String s = entry.toString();
-                    return !s.isEmpty();
-                });
-            nbt_limit_bytes = builder
-                .comment("NBT大小限制 (字节)，0=无限制",
-                         "拥有超过此大小NBT的物品将被跳过")
-                .defineInRange("limit_bytes", 0, 0, 102400);
+                         "附魔ID仅在Enchantments或StoredEnchantments列表内精确匹配",
+                         "精确条件可填写JSON字符串: item限定物品ID，all中的条件同时成立",
+                         "条件: path字段路径，op为exists/eq/gt/gte/lt/lte，value为字符串/数字/布尔值",
+                         "列表条件: path加any条件数组，同一个列表元素必须满足全部条件",
+                         "JSON示例与宝石/附魔等级配置见README；无效JSON规则整条停用并告警")
+                .defineList("segments", List.of(), entry -> entry instanceof String rule && !rule.trim().isEmpty());
             builder.pop();
 
             builder.push("compatibility");
@@ -251,272 +220,60 @@ public class BLModConfig {
             try {
                 raw = curve.get();
             } catch (Exception e) {
-                return List.of(
-                    new CurveSegment(50, 5, 1.0f),
-                    new CurveSegment(200, 10, 0.75f),
-                    new CurveSegment(500, 20, 0.5f),
-                    new CurveSegment(5000, 35, 0.5f)
-                );
+                return defaultCurve();
             }
-            if (!Objects.equals(raw, cachedRawCurve)) {
-                cachedRawCurve = raw;
-                List<CurveSegment> parsed = new ArrayList<>();
-                for (String entry : raw) {
-                    try {
-                        String[] parts = entry.toString().split(",");
-                        parsed.add(new CurveSegment(
-                            Integer.parseInt(parts[0].trim()),
-                            Integer.parseInt(parts[1].trim()),
-                            Float.parseFloat(parts[2].trim())
-                        ));
-                    } catch (Exception e) {
-                    }
-                }
-                if (parsed.isEmpty()) {
-                    parsed.add(new CurveSegment(99999, 50, 0.5f));
-                }
-                cachedCurve = Collections.unmodifiableList(parsed);
-            }
-            return cachedCurve;
-        }
-
-        private static DedupEntry parseDedupEntry(String raw) {
-            String s = raw.toString();
-            DedupType type;
-            String idPart;
-            if (s.startsWith("@")) {
-                type = DedupType.MOD;
-                idPart = s.substring(1);
-            } else if (s.startsWith("#")) {
-                type = DedupType.TAG;
-                idPart = s.substring(1);
-            } else if (s.endsWith("::")) {
-                type = DedupType.PREFIX;
-                idPart = s.substring(0, s.length() - 2);
-            } else {
-                type = DedupType.ITEM;
-                idPart = s;
-            }
-
-            int lastComma = idPart.lastIndexOf(',');
-            if (lastComma > 0) {
-                String id = idPart.substring(0, lastComma);
+            List<CurveSegment> parsed = new ArrayList<>();
+            for (String entry : raw) {
                 try {
-                    int count = Integer.parseInt(idPart.substring(lastComma + 1).trim());
-                    if (type == DedupType.MOD) {
-                        return id.isEmpty() ? null : new DedupEntry(type, id, count);
-                    }
-                    if (type == DedupType.PREFIX) {
-                        if (id.isEmpty() || !ResourceLocation.isValidResourceLocation(id)) return null;
-                        return new DedupEntry(type, id.toLowerCase(), count);
-                    }
-                    if (!ResourceLocation.isValidResourceLocation(id)) return null;
-                    return new DedupEntry(type, id, count);
-                } catch (NumberFormatException e) {
-                    return null;
+                    String[] parts = entry.split(",");
+                    if (parts.length != 3) continue;
+                    parsed.add(new CurveSegment(
+                        Integer.parseInt(parts[0].trim()),
+                        Integer.parseInt(parts[1].trim()),
+                        Float.parseFloat(parts[2].trim())
+                    ));
+                } catch (Exception ignored) {
                 }
             }
-            // no count
-            if (type == DedupType.MOD) {
-                return idPart.isEmpty() ? null : new DedupEntry(type, idPart, -1);
-            }
-            String id = type == DedupType.PREFIX ? idPart.toLowerCase() : idPart;
-            if (!ResourceLocation.isValidResourceLocation(idPart)) return null;
-            return new DedupEntry(type, id, -1);
+            List<CurveSegment> sanitized = LootConfigSnapshot.sanitizeCurve(parsed);
+            return sanitized.isEmpty() ? defaultCurve() : sanitized;
         }
 
-        private void refreshNoStack() {
-            List<? extends String> raw = no_stack_items.get();
-            if (!Objects.equals(raw, cachedRawNoStack)) {
-                cachedRawNoStack = raw;
-                Map<String, Integer> ids = new HashMap<>();
-                Map<String, Integer> prefixes = new HashMap<>();
-                Map<TagKey<Item>, Integer> tags = new HashMap<>();
-                Map<String, Integer> mods = new HashMap<>();
-                for (String entry : raw) {
-                    DedupEntry de = parseDedupEntry(entry);
-                    if (de == null) continue;
-                    int count = de.count > 0 ? de.count : no_stack_count.get();
-                    switch (de.type) {
-                        case TAG -> tags.put(TagKey.create(Registries.ITEM, rl(de.id)), count);
-                        case MOD -> mods.put(de.id, count);
-                        case PREFIX -> prefixes.put(de.id, count);
-                        default -> ids.put(de.id, count);
-                    }
-                }
-                cachedNoStackIds = Collections.unmodifiableMap(ids);
-                cachedNoStackPrefixes = Collections.unmodifiableMap(prefixes);
-                cachedNoStackTags = Collections.unmodifiableMap(tags);
-                cachedNoStackMods = Collections.unmodifiableMap(mods);
-            }
+        private static List<CurveSegment> defaultCurve() {
+            return List.of(
+                new CurveSegment(50, 5, 1.0f),
+                new CurveSegment(200, 10, 0.75f),
+                new CurveSegment(500, 20, 0.5f),
+                new CurveSegment(5000, 35, 0.5f));
         }
 
         public int getDedupLimit(Item item) {
-            ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(item);
-            if (itemId == null) return 0;
-
-            refreshNoStack();
-
-            Integer limit = cachedNoStackIds.get(itemId.toString());
-            if (limit != null) return limit;
-
-            Integer modLimit = cachedNoStackMods.get(itemId.getNamespace());
-            if (modLimit != null) return modLimit;
-
-            String idStr = itemId.toString();
-            for (var entry : cachedNoStackPrefixes.entrySet()) {
-                if (idStr.startsWith(entry.getKey())) return entry.getValue();
-            }
-
-            for (var entry : cachedNoStackTags.entrySet()) {
-                if (item.builtInRegistryHolder().is(entry.getKey())) return entry.getValue();
-            }
-            return 0;
-        }
-
-        private void refreshBonusBlacklist() {
-            List<? extends String> raw = bonus_blacklisted_items.get();
-            if (!Objects.equals(raw, cachedRawBonusBlacklist)) {
-                cachedRawBonusBlacklist = raw;
-                Set<String> ids = new HashSet<>();
-                Set<String> prefixes = new HashSet<>();
-                Set<TagKey<Item>> tags = new HashSet<>();
-                Set<String> mods = new HashSet<>();
-                for (String entry : raw) {
-                    String s = entry.toString();
-                    if (s.startsWith("@")) {
-                        mods.add(s.substring(1));
-                    } else if (s.startsWith("#")) {
-                        TagKey<Item> t = TagKey.create(Registries.ITEM, rl(s.substring(1)));
-                        if (t != null) tags.add(t);
-                    } else if (s.endsWith("::")) {
-                        prefixes.add(s.substring(0, s.length() - 2).toLowerCase());
-                    } else {
-                        ids.add(s.toLowerCase());
-                    }
-                }
-                cachedBonusBlacklistIds = Collections.unmodifiableSet(ids);
-                cachedBonusBlacklistPrefixes = Collections.unmodifiableSet(prefixes);
-                cachedBonusBlacklistTags = Collections.unmodifiableSet(tags);
-                cachedBonusBlacklistMods = Collections.unmodifiableSet(mods);
-            }
+            return BLModConfig.snapshot().dedupRules().limit(item);
         }
 
         public boolean isBonusBlacklisted(Item item) {
-            ResourceLocation key = BuiltInRegistries.ITEM.getKey(item);
-            if (key == null) return false;
-            refreshBonusBlacklist();
-            String id = key.toString().toLowerCase();
-            if (cachedBonusBlacklistIds.contains(id)) return true;
-            if (cachedBonusBlacklistMods.contains(key.getNamespace())) return true;
-            for (String prefix : cachedBonusBlacklistPrefixes) {
-                if (id.startsWith(prefix)) return true;
-            }
-            for (TagKey<Item> tag : cachedBonusBlacklistTags) {
-                if (item.builtInRegistryHolder().is(tag)) return true;
-            }
-            return false;
+            return BLModConfig.snapshot().bonusBlacklist().matches(item);
         }
 
         public boolean isBonusBlacklisted(ItemStack stack) {
-            if (isBonusBlacklisted(stack.getItem())) return true;
-            return isNbtFiltered(stack);
+            return BLModConfig.snapshot().isBonusBlacklisted(stack);
         }
 
         public boolean isGlobalBlacklisted(ItemStack stack) {
-            if (isGlobalBlacklisted(stack.getItem())) return true;
-            refreshNbtFilter();
-            if (!"global".equals(cachedNbtScope)) return false;
-            return isNbtFiltered(stack);
-        }
-
-        private void refreshNbtFilter() {
-            List<? extends String> raw = nbt_segments.get();
-            if (!Objects.equals(raw, cachedRawNbtSegments)) {
-                cachedRawNbtSegments = raw;
-                cachedNbtScope = nbt_scope.get();
-                Set<String> segments = new HashSet<>();
-                for (String entry : raw) {
-                    String s = entry.toString();
-                    if (!s.isEmpty()) segments.add(s);
-                }
-                cachedNbtSegments = Collections.unmodifiableSet(segments);
-            }
+            return BLModConfig.snapshot().isGlobalBlacklisted(stack);
         }
 
         public boolean isNbtFiltered(ItemStack stack) {
-            if (!stack.hasTag() || stack.getTag().isEmpty()) return false;
-            refreshNbtFilter();
-            if (cachedNbtSegments.isEmpty() && nbt_limit_bytes.get() <= 0) return false;
-            int limit = nbt_limit_bytes.get();
-            String nbtStr = null;
-            if (limit > 0) {
-                nbtStr = stack.getTag().toString();
-                if (nbtStr.length() > limit) return true;
-            }
-            if (!cachedNbtSegments.isEmpty()) {
-                if (nbtStr == null) nbtStr = stack.getTag().toString();
-                for (String seg : cachedNbtSegments) {
-                    if (nbtStr.contains(seg)) return true;
-                }
-            }
-            return false;
-        }
-
-        private void refreshGlobalBlacklist() {
-            List<? extends String> raw = global_blacklisted_items.get();
-            if (!Objects.equals(raw, cachedRawGlobalBlacklist)) {
-                cachedRawGlobalBlacklist = raw;
-                Set<String> ids = new HashSet<>();
-                Set<String> prefixes = new HashSet<>();
-                Set<TagKey<Item>> tags = new HashSet<>();
-                Set<String> mods = new HashSet<>();
-                for (String entry : raw) {
-                    String s = entry.toString();
-                    if (s.startsWith("@")) {
-                        mods.add(s.substring(1));
-                    } else if (s.startsWith("#")) {
-                        TagKey<Item> t = TagKey.create(Registries.ITEM, rl(s.substring(1)));
-                        if (t != null) tags.add(t);
-                    } else if (s.endsWith("::")) {
-                        prefixes.add(s.substring(0, s.length() - 2).toLowerCase());
-                    } else {
-                        ids.add(s.toLowerCase());
-                    }
-                }
-                cachedGlobalBlacklistIds = Collections.unmodifiableSet(ids);
-                cachedGlobalBlacklistPrefixes = Collections.unmodifiableSet(prefixes);
-                cachedGlobalBlacklistTags = Collections.unmodifiableSet(tags);
-                cachedGlobalBlacklistMods = Collections.unmodifiableSet(mods);
-            }
+            return BLModConfig.snapshot().isNbtFiltered(stack);
         }
 
         public boolean isGlobalBlacklisted(Item item) {
-            ResourceLocation key = BuiltInRegistries.ITEM.getKey(item);
-            if (key == null) return false;
-            refreshGlobalBlacklist();
-            String id = key.toString().toLowerCase();
-            if (cachedGlobalBlacklistIds.contains(id)) return true;
-            if (cachedGlobalBlacklistMods.contains(key.getNamespace())) return true;
-            for (String prefix : cachedGlobalBlacklistPrefixes) {
-                if (id.startsWith(prefix)) return true;
-            }
-            for (TagKey<Item> tag : cachedGlobalBlacklistTags) {
-                if (item.builtInRegistryHolder().is(tag)) return true;
-            }
-            return false;
-        }
-
-
-        private static ResourceLocation rl(String id) {
-            return ResourceLocation.tryParse(id);
+            return BLModConfig.snapshot().globalBlacklist().matches(item);
         }
 
     }
 
     public record CurveSegment(int limit, int divisor, float probability) {}
-    private enum DedupType { ITEM, PREFIX, TAG, MOD }
-    private record DedupEntry(DedupType type, String id, int count) {}
 
     public static boolean carbonMode() {
         try { return SERVER.carbon_mode.get(); }
@@ -563,13 +320,8 @@ public class BLModConfig {
         catch (Exception e) { return 0; }
     }
 
-    public static int nbtLimitBytes() {
-        try { return SERVER.nbt_limit_bytes.get(); }
-        catch (Exception e) { return 0; }
-    }
-
     public static String nbtScope() {
-        try { return SERVER.nbt_scope.get(); }
+        try { return LootConfigSnapshot.normalizeNbtScope(SERVER.nbt_scope.get()); }
         catch (Exception e) { return "global"; }
     }
 
@@ -588,8 +340,43 @@ public class BLModConfig {
         catch (Exception e) { return true; }
     }
 
-    public static int compatibilityDefaultSlots() {
-        return 27;
+    private static volatile LootConfigSnapshot cachedSnapshot;
+
+    public static LootConfigSnapshot snapshot() {
+        if (!serverSpec.isLoaded()) return LootConfigSnapshot.capture();
+        LootConfigSnapshot current = cachedSnapshot;
+        if (current != null) return current;
+        synchronized (BLModConfig.class) {
+            current = cachedSnapshot;
+            if (current == null) {
+                current = LootConfigSnapshot.capture();
+                cachedSnapshot = current;
+            }
+            return current;
+        }
+    }
+
+    static synchronized void invalidateSnapshot() {
+        cachedSnapshot = null;
+    }
+
+    private static void invalidateIfServerSpec(ModConfigEvent event) {
+        if (event.getConfig().getSpec() == serverSpec) invalidateSnapshot();
+    }
+
+    @SubscribeEvent
+    public static void onConfigLoading(ModConfigEvent.Loading event) {
+        invalidateIfServerSpec(event);
+    }
+
+    @SubscribeEvent
+    public static void onConfigReloading(ModConfigEvent.Reloading event) {
+        invalidateIfServerSpec(event);
+    }
+
+    @SubscribeEvent
+    public static void onConfigUnloading(ModConfigEvent.Unloading event) {
+        invalidateIfServerSpec(event);
     }
 
     public static final ForgeConfigSpec serverSpec;

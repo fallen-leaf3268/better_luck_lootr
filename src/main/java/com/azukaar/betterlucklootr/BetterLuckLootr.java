@@ -1,16 +1,9 @@
 package com.azukaar.betterlucklootr;
 
-import java.lang.reflect.Constructor;
-
 import com.mojang.serialization.Codec;
 
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.RangedAttribute;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.level.storage.loot.entries.LootItem;
-import net.minecraft.world.level.storage.loot.functions.LootItemFunction;
-import net.minecraft.world.level.storage.loot.predicates.LootItemCondition;
-import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.loot.IGlobalLootModifier;
 import net.minecraftforge.event.entity.EntityAttributeModificationEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -50,21 +43,6 @@ public class BetterLuckLootr
     public static final Supplier<Attribute> LOOT_RICHNESS =
         ATTRIBUTES.register("loot_richness", () -> new RangedAttribute("attribute.better_luck_lootr.loot_richness", 0.0, 0.0, 500.0).setSyncable(true));
 
-    public static final Constructor<LootItem> LOOT_ITEM_CTOR;
-    static {
-        Constructor<LootItem> ctor = null;
-        for (Constructor<?> c : LootItem.class.getDeclaredConstructors()) {
-            c.setAccessible(true);
-            Class<?>[] p = c.getParameterTypes();
-            if (p.length == 5 && p[0] == Item.class && p[1] == int.class && p[2] == int.class
-                && p[3] == LootItemFunction[].class && p[4] == LootItemCondition[].class) {
-                ctor = (Constructor<LootItem>) c;
-                break;
-            }
-        }
-        LOOT_ITEM_CTOR = ctor;
-    }
-
     public BetterLuckLootr(FMLJavaModLoadingContext context)
     {
         IEventBus modEventBus = context.getModEventBus();
@@ -73,12 +51,11 @@ public class BetterLuckLootr
         ATTRIBUTES.register(modEventBus);
 
         context.registerConfig(ModConfig.Type.COMMON, BLModConfig.serverSpec);
-
-        MinecraftForge.EVENT_BUS.register(LootTableFilter.class);
     }
 
     @SubscribeEvent
     public static void onEntityAttributeModification(EntityAttributeModificationEvent event) {
         event.add(EntityType.PLAYER, LOOT_RICHNESS.get());
     }
+
 }

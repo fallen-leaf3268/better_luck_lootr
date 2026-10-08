@@ -2,8 +2,8 @@ plugins {
     id 'eclipse'
     id 'idea'
     id 'maven-publish'
-    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
-    id 'org.spongepowered.mixin' version '0.7.+'
+    id 'net.minecraftforge.gradle' version '6.0.54'
+    id 'org.spongepowered.mixin' version '0.7.38'
 }
 
 version = mod_version
@@ -96,7 +96,16 @@ minecraft {
         // By default, the server will crash when no gametests are provided.
         // The gametest system is also enabled by default for other run configs under the /test command.
         gameTestServer {
-            property 'forge.enabledGameTestNamespaces', mod_id
+            workingDirectory project.file(providers.gradleProperty('compatMods').isPresent() ? 'run-compat' : 'run')
+            property 'forge.enabledGameTestNamespaces', 'forge'
+            property 'forge.logging.console.level', 'info'
+            property 'bll.compatExpectedMods', providers.gradleProperty('compatExpectedMods').getOrElse('')
+            jvmArgs '-Xmx1G', '-XX:-UsePerfData'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.test
+                }
+            }
         }
 
         data {
@@ -118,6 +127,9 @@ mixin {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
+    if (providers.gradleProperty('compatRepository').isPresent()) {
+        flatDir { dirs providers.gradleProperty('compatRepository').get() }
+    }
     maven {
         name = 'SpongePowered'
         url = 'https://repo.spongepowered.org/repository/maven-public/'
@@ -128,6 +140,23 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    providers.gradleProperty('compatMods').getOrElse('').split(',').findAll { !it.isBlank() }.each {
+        testRuntimeOnly fg.deobf(it.trim())
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+tasks.register('prepareGameTestStructures', Copy) {
+    from 'src/test/structures'
+    into(providers.gradleProperty('compatMods').isPresent() ? 'run-compat/gameteststructures' : 'run/gameteststructures')
+}
+
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    dependsOn 'prepareGameTestStructures'
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

@@ -6,6 +6,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import com.azukaar.betterlucklootr.BLModConfig;
+import com.azukaar.betterlucklootr.BonusRollScope;
 
 import net.minecraft.world.level.storage.loot.LootContext;
 
@@ -14,6 +15,10 @@ public class LootContextMixin {
 
     @Inject(method = "getLuck", at = @At("RETURN"), cancellable = true)
     private void capLuckForVanilla(CallbackInfoReturnable<Float> cir) {
+        if (BonusRollScope.isBonusContext((LootContext) (Object) this)) {
+            cir.setReturnValue(0.0f);
+            return;
+        }
         int cap = BLModConfig.maxEffectiveLuck();
         if (cap > 0) {
             float val = cir.getReturnValue();
